@@ -20,13 +20,13 @@ try:
     HAS_CV2 = True
 except ImportError:
     HAS_CV2 = False
-    
+
 try:
     import cupy
     from cupyx.scipy.ndimage import affine_transform as cupy_affine_transform
     HAS_CUPY = True
 except ImportError:
-    HAS_CUPY = False    
+    HAS_CUPY = False
 
 """
 def OG_register:
@@ -89,7 +89,7 @@ def cfd_register(smap, missing=None, order=3, use_scipy=False):
 def CV_register(smap, missing=None, order=3, use_scipy=False):
     """
     original: aiapy.calibrate.register
-    original: 
+    original:
     ***MODIFIED FROM ORIGINAL; streamlined contains_full_disk***
     *** and implements R. Attie's version using cv2 [see scale_rotate()]***
 
@@ -97,7 +97,7 @@ def CV_register(smap, missing=None, order=3, use_scipy=False):
     1.5 `~sunpy.map.sources.sdo.AIAMap`.
 
     KEY DIFFERENCES TO smap.rotate:
-    1. 
+    1.
     2.
 
     """
@@ -130,9 +130,17 @@ def CV_register(smap, missing=None, order=3, use_scipy=False):
                           missing=missing,
                           use_scipy=use_scipy)
     """
-    
-    tempmap = scale_rotate(smap, scale_factor=scale_factor.value, missing=missing)
-    
+
+    interp = None
+    if order==1:
+        interp = cv2.INTER_LINEAR
+    elif order==3:
+        interp = cv2.INTER_CUBIC
+    else:
+        raise ValueError("only order 1 or 3 for openCV calibration")
+
+    tempmap = scale_rotate(smap, scale_factor=scale_factor.value, missing=missing, interp=interp)
+
     # extract center from padded smap.rotate output
     # crpix1 and crpix2 will be equal (recenter=True), as prep does not
     # work with submaps
@@ -162,7 +170,7 @@ def cupy_register(smap, missing=None, order=1):
     #check for Cupy
     if not HAS_CUPY:
         raise ImportError("No CuPy installed. Cannot use cupy_register")
-    
+
     # This implementation is taken directly from the `aiaprep` method in
     # sunpy.instr.aia.aiaprep under the terms of the BSD 2 Clause license.
     # See license in licenses/sunpy.rst
@@ -190,7 +198,7 @@ def cupy_register(smap, missing=None, order=1):
                           scale=scale_factor.value,
                           order=order,
                           missing=missing)
-                          
+
 
     # extract center from padded smap.rotate output
     # crpix1 and crpix2 will be equal (recenter=True), as prep does not
@@ -224,18 +232,18 @@ def JI_contains_full_disk(smap):
         return x, y
     x, y = _xy(top_)
     horizontal1 = smap.pixel_to_world(x, y)
-    
+
     x, y = _xy(bottom)
     horizontal2 = smap.pixel_to_world(x, y)
-    
+
     x, y = _xy(left_hand_side)
     vertical1 = smap.pixel_to_world(x, y)
-    
+
     x, y = _xy(right_hand_side)
     vertical2 = smap.pixel_to_world(x, y)
-    
+
     radius = smap.rsun_obs
-    
+
     # Determine the top and bottom edges of the map
     top = None
     bot = None
@@ -243,35 +251,35 @@ def JI_contains_full_disk(smap):
         top = horizontal1
     elif np.all(horizontal1.Ty < -radius):
         bot = horizontal1
-        
+
     if np.all(horizontal2.Ty > radius):
         top = horizontal2
     elif np.all(horizontal2.Ty < -radius):
         bot = horizontal2
-        
+
     # If either the top edge
     if top is None or bot is None:
         return False
-    
+
     lhs = None
     rhs = None
     if np.all(vertical1.Tx > radius):
         rhs = vertical1
     elif np.all(vertical1.Tx < -radius):
         lhs = vertical1
-    
+
     if np.all(vertical2.Tx > radius):
         rhs = vertical2
     elif np.all(vertical2.Tx < -radius):
         lhs = vertical2
-        
+
     if lhs is None or rhs is None:
         return False
-    
+
     return np.all(top.Ty > radius) and np.all(bot.Ty < -radius) and np.all(lhs.Tx < -radius) and np.all(rhs.Tx > radius)
 
 
-def scale_rotate(smap, angle=None, scale_factor=1., missing=None):
+def scale_rotate(smap, angle=None, scale_factor=1., missing=None, interp=cv2.INTER_CUBIC):
     """
     Modified from R. Attie implementation
      At https://github.com/WaaallEEE/AIA-reloaded/blob/master/calibration.py
@@ -288,23 +296,18 @@ def scale_rotate(smap, angle=None, scale_factor=1., missing=None):
         ang = -smap.meta['CROTA2']
     elif angle is not None:
         ang = angle
-        
+
     # convert angle to radian
     c = np.cos(np.deg2rad(ang))
     s = np.sin(np.deg2rad(ang))
     rmatrix = np.array([[c, -s],
                         [s, c]])
-            
+
     array_center = (np.array(smap.data.shape)[::-1] - 1) / 2.0
 
-    # The FITS-WCS transform is by definition defined around the
-    # reference coordinate in the header.
-    lon, lat = smap._get_lon_lat(smap.reference_coordinate.frame)
-    rotation_center = u.Quantity([lon, lat])
-    
     # Copy meta data
     new_meta = smap.meta.copy()
-    
+
     extent = np.max(np.abs(np.vstack((smap.data.shape @ rmatrix,
                                       smap.data.shape @ rmatrix.T))), axis=0)
 
@@ -316,21 +319,21 @@ def scale_rotate(smap, angle=None, scale_factor=1., missing=None):
 
     new_meta['crpix1'] += pad_x
     new_meta['crpix2'] += pad_y
-    
+
     new_data = np.pad(smap.data,
                       ((pad_y, pad_y), (pad_x, pad_x)),
                       mode='constant',
                       constant_values=(missing, missing))
 
     pixel_array_center = (np.flipud(new_data.shape) - 1) / 2.0
-    
+
     # Create a temporary map so we can use it for the data to pixel calculation.
     temp_map = smap._new_instance(new_data, new_meta, smap.plot_settings)
 
     #this is same as `reference_pixel` in R. Attie original scale_rotate
     pixel_rotation_center = u.Quantity(temp_map.world_to_pixel(smap.reference_coordinate, origin=0)).value
     pixel_center = pixel_rotation_center
-    
+
     del temp_map
 
     # DO CV THING HERE
@@ -346,16 +349,22 @@ def scale_rotate(smap, angle=None, scale_factor=1., missing=None):
 
     #cast new_data to float64, then warpAffine it
     new_data = new_data.astype(np.float64, casting='safe')
-    
-    rotated_image = cv2.warpAffine(new_data, rmatrix_cv, new_data.shape, cv2.INTER_CUBIC)
-    
+
+    rotated_image = cv2.warpAffine(new_data, rmatrix_cv, new_data.shape, interp)
+
     new_reference_pixel = pixel_array_center
-    
+
+    # The FITS-WCS transform is by definition defined around the
+    # reference coordinate in the header. BOTTLENECK!!!
+    lon, lat = smap._get_lon_lat(smap.reference_coordinate.frame)
+    rotation_center = u.Quantity([lon, lat])
+
+    # Define the new reference_pixel
     new_meta['crval1'] = rotation_center[0].value
     new_meta['crval2'] = rotation_center[1].value
     new_meta['crpix1'] = new_reference_pixel[0] + 1  # FITS pixel origin is 1
     new_meta['crpix2'] = new_reference_pixel[1] + 1  # FITS pixel origin is 1
-    
+
     # Unpad the array if necessary
     unpad_x = -np.min((diff[1], 0))
     if unpad_x > 0:
@@ -380,7 +389,7 @@ def scale_rotate(smap, angle=None, scale_factor=1., missing=None):
     if scale_factor != 1.0:
         new_meta['cdelt1'] = (smap.scale[0] / scale_factor).value
         new_meta['cdelt2'] = (smap.scale[1] / scale_factor).value
-    
+
     # Remove old CROTA kwargs because we have saved a new PCi_j matrix.
     new_meta.pop('CROTA1', None)
     new_meta.pop('CROTA2', None)
@@ -389,12 +398,12 @@ def scale_rotate(smap, angle=None, scale_factor=1., missing=None):
     new_meta.pop('CD1_2', None)
     new_meta.pop('CD2_1', None)
     new_meta.pop('CD2_2', None)
-    
+
     # Create new map with the modification
     new_map = smap._new_instance(new_data, new_meta, smap.plot_settings)
-    
+
     return new_map
-    
+
 # my testing says this takes about the same time as np.pad (so I've kept np.pad in cv_register/scale_rotate)
 def aia_pad(image, pad_x, pad_y, missing):
     newsize = [image.shape[0]+2*pad_y, image.shape[1]+2*pad_x]
@@ -418,15 +427,10 @@ def cupy_rotate(smap, angle: u.deg = None, rmatrix=None, order=1, scale=1.0,rece
         raise ValueError("You cannot specify both an angle and a rotation matrix.")
     elif angle is None and rmatrix is None:
         rmatrix = smap.rotation_matrix
-    
+
     if order not in range(2):
         raise ValueError("Cupy only supports order 0 or 1")
 
-    # The FITS-WCS transform is by definition defined around the
-    # reference coordinate in the header.
-    lon, lat = smap._get_lon_lat(smap.reference_coordinate.frame)
-    rotation_center = u.Quantity([lon, lat])
-    
     # Copy meta data
     new_meta = smap.meta.copy()
     if angle is not None:
@@ -439,56 +443,61 @@ def cupy_rotate(smap, angle: u.deg = None, rmatrix=None, order=1, scale=1.0,rece
     # Calculate the shape in pixels to contain all of the image data
     extent = np.max(np.abs(np.vstack((smap.data.shape @ rmatrix,
                                       smap.data.shape @ rmatrix.T))), axis=0)
-    
+
     # Calculate the needed padding or unpadding
     diff = np.asarray(np.ceil((extent - smap.data.shape) / 2), dtype=int).ravel()
     # Pad the image array
     pad_x = int(np.max((diff[1], 0)))
     pad_y = int(np.max((diff[0], 0)))
-    
+
     new_data = np.pad(smap.data,
                       ((pad_y, pad_y), (pad_x, pad_x)),
                       mode='constant',
                       constant_values=(missing, missing))
     new_meta['crpix1'] += pad_x
     new_meta['crpix2'] += pad_y
-    
+
     # All of the following pixel calculations use a pixel origin of 0
-    
+
     pixel_array_center = (np.flipud(new_data.shape) - 1) / 2.0
-    
+
     # Create a temporary map so we can use it for the data to pixel calculation.
     temp_map = smap._new_instance(new_data, new_meta, smap.plot_settings)
-    
+
     # Convert the axis of rotation from data coordinates to pixel coordinates
     pixel_rotation_center = u.Quantity(temp_map.world_to_pixel(smap.reference_coordinate,origin=0)).value
     del temp_map
-    
+
     if recenter:
         pixel_center = pixel_rotation_center
     else:
         pixel_center = pixel_array_center
-        
+
     # Apply the rotation to the image data
     new_data = do_cupy_affine_transform(new_data.T,
                                 np.asarray(rmatrix),
                                 order=order, scale=scale,
                                 image_center=np.flipud(pixel_center),
                                 recenter=recenter, missing=missing).T
-    
+
     if recenter:
         new_reference_pixel = pixel_array_center
     else:
         # Calculate new pixel coordinates for the rotation center
         new_reference_pixel = pixel_center + np.dot(rmatrix,pixel_rotation_center - pixel_center)
         new_reference_pixel = np.array(new_reference_pixel).ravel()
-        
+
+    # The FITS-WCS transform is by definition defined around the
+    # reference coordinate in the header. BOTTLENECK!!!
+    lon, lat = smap._get_lon_lat(smap.reference_coordinate.frame)
+    rotation_center = u.Quantity([lon, lat])
+
     # Define the new reference_pixel
     new_meta['crval1'] = rotation_center[0].value
     new_meta['crval2'] = rotation_center[1].value
     new_meta['crpix1'] = new_reference_pixel[0] + 1  # FITS pixel origin is 1
     new_meta['crpix2'] = new_reference_pixel[1] + 1  # FITS pixel origin is 1
-    
+
     # Unpad the array if necessary
     unpad_x = -np.min((diff[1], 0))
     if unpad_x > 0:
@@ -498,7 +507,7 @@ def cupy_rotate(smap, angle: u.deg = None, rmatrix=None, order=1, scale=1.0,rece
     if unpad_y > 0:
         new_data = new_data[unpad_y:-unpad_y, :]
         new_meta['crpix2'] -= unpad_y
-        
+
     # Calculate the new rotation matrix to store in the header by
     # "subtracting" the rotation matrix used in the rotate from the old one
     # That being calculate the dot product of the old header data with the
@@ -508,7 +517,7 @@ def cupy_rotate(smap, angle: u.deg = None, rmatrix=None, order=1, scale=1.0,rece
     new_meta['PC1_2'] = pc_C[0, 1]
     new_meta['PC2_1'] = pc_C[1, 0]
     new_meta['PC2_2'] = pc_C[1, 1]
-    
+
     # Update pixel size if image has been scaled.
     if scale != 1.0:
         new_meta['cdelt1'] = (smap.scale[0] / scale).value
@@ -522,17 +531,17 @@ def cupy_rotate(smap, angle: u.deg = None, rmatrix=None, order=1, scale=1.0,rece
     new_meta.pop('CD1_2', None)
     new_meta.pop('CD2_1', None)
     new_meta.pop('CD2_2', None)
-    
+
     # Create new map with the modification
     new_map = smap._new_instance(new_data, new_meta, smap.plot_settings)
-    
+
     return new_map
 
 
 def do_cupy_affine_transform(image, rmatrix, order=1, scale=1.0, image_center=None,recenter=False, missing=0.0):
     """
     Adapted from sunpy.image.transform.affine_transform
-    
+
     ***MODIFIED: used cupyx.scipy.ndimage.affine_transformation
     ***MODIFIED added cupy stuff
     """
@@ -564,5 +573,5 @@ def do_cupy_affine_transform(image, rmatrix, order=1, scale=1.0, image_center=No
         image.T, rmatrix, offset=shift, order=order,
         mode='constant', cval=missing).T
 
-    
+
     return cupy.asnumpy(rotated_image)
